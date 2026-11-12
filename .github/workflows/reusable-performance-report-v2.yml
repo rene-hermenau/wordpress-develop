@@ -27,6 +27,16 @@ on:
         required: false
         type: boolean
         default: false
+      fail-on-regression:
+        description: 'Whether a metric that exceeds an error budget fails the job.'
+        required: false
+        type: boolean
+        default: false
+      regression-accepted:
+        description: 'Whether the regressions of this change have been reviewed and accepted.'
+        required: false
+        type: boolean
+        default: false
     secrets:
       CODEVITALS_PROJECT_TOKEN:
         description: 'The authorization token for https://www.codevitals.run/project/wordpress.'
@@ -82,8 +92,34 @@ jobs:
       - name: Compare results
         run: node ./tests/performance/compare-results.js "${RUNNER_TEMP}/summary.md"
 
+      - name: Check performance budgets
+        id: check-budgets
+        continue-on-error: true
+        env:
+          PERFORMANCE_REGRESSION_MODE: ${{ inputs.fail-on-regression && 'fail' || 'report' }}
+          PERFORMANCE_REGRESSION_ACCEPTED: ${{ inputs.regression-accepted }}
+        run: node ./tests/performance/check-regressions.js "${RUNNER_TEMP}/budgets.md"
+
       - name: Add workflow summary
-        run: cat "${RUNNER_TEMP}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ -f "${RUNNER_TEMP}/budgets.md" ]; then
+            cat "${RUNNER_TEMP}/budgets.md" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          cat "${RUNNER_TEMP}/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload budget check results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: performance-budgets-${{ inputs.multisite && 'multisite' || 'single' }}-${{ inputs.memcached && 'memcached' || 'default' }}
+          path: artifacts/performance-regressions.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Fail on performance regressions
+        if: ${{ steps.check-budgets.outcome == 'failure' }}
+        run: |
+          echo "::error::A deterministic performance metric exceeds its budget. See the job summary for details."
+          exit 1
 
       - name: Set the base sha
         # Only needed when publishing results.
