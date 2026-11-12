@@ -60,13 +60,13 @@ const timing = {
  */
 const budgets = {
 	scriptCount: deterministic,
-	scriptTransferSize: {
+	scriptBytes: {
 		...deterministic,
 		minAbsolute: 20 * 1024,
 		minRelative: 0.02,
 	},
 	stylesheetCount: deterministic,
-	stylesheetTransferSize: {
+	stylesheetBytes: {
 		...deterministic,
 		minAbsolute: 10 * 1024,
 		minRelative: 0.02,
