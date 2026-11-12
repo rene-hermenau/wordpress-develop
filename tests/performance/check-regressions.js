@@ -17,7 +17,6 @@
  * External dependencies.
  */
 const { writeFileSync } = require( 'node:fs' );
-const { join } = require( 'node:path' );
 
 /**
  * Internal dependencies
@@ -37,77 +36,48 @@ const regressionAccepted =
 	process.env.PERFORMANCE_REGRESSION_ACCEPTED === 'true';
 
 /**
- * A metric regresses when its median grows by more than `minAbsolute` and by
- * more than `minRelative` of the target's median. Timing metrics must also grow
- * by more than `noiseFactor` times the combined spread of both samples.
- *
  * Asset counts and sizes, database queries and memory are deterministic for a
- * given build, so a regression there is real and fails the check. Timings carry
- * CI noise, so they are reported as warnings.
+ * given build, so a regression there is real and fails the check.
+ */
+const deterministic = { minAbsolute: 2, minRelative: 0.05, severity: 'error' };
+
+/**
+ * Timings carry CI noise, so they must also grow by more than `noiseFactor`
+ * times the combined spread of both samples, and are reported as warnings.
+ */
+const timing = {
+	minAbsolute: 10,
+	minRelative: 0.1,
+	noiseFactor: 3,
+	severity: 'warning',
+};
+
+/**
+ * A metric regresses when its median grows by more than `minAbsolute` and by
+ * more than `minRelative` of the target's median.
  *
  * @type {Record<string, {minAbsolute: number, minRelative: number, noiseFactor?: number, severity: 'error'|'warning'}>}
  */
 const budgets = {
-	scriptCount: { minAbsolute: 2, minRelative: 0.05, severity: 'error' },
+	scriptCount: deterministic,
 	scriptTransferSize: {
+		...deterministic,
 		minAbsolute: 20 * 1024,
 		minRelative: 0.02,
-		severity: 'error',
 	},
-	stylesheetCount: { minAbsolute: 2, minRelative: 0.05, severity: 'error' },
+	stylesheetCount: deterministic,
 	stylesheetTransferSize: {
+		...deterministic,
 		minAbsolute: 10 * 1024,
 		minRelative: 0.02,
-		severity: 'error',
 	},
-	wpDbQueries: { minAbsolute: 2, minRelative: 0.05, severity: 'error' },
-	wpMemoryUsage: {
-		minAbsolute: 1024 * 1024,
-		minRelative: 0.05,
-		severity: 'error',
-	},
-	domContentLoaded: {
-		minAbsolute: 10,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
-	domContentLoadedMinusTtfb: {
-		minAbsolute: 10,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
-	load: {
-		minAbsolute: 10,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
-	largestContentfulPaint: {
-		minAbsolute: 10,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
-	lcpMinusTtfb: {
-		minAbsolute: 10,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
-	timeToFirstByte: {
-		minAbsolute: 5,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
-	wpTotal: {
-		minAbsolute: 5,
-		minRelative: 0.1,
-		noiseFactor: 3,
-		severity: 'warning',
-	},
+	wpDbQueries: deterministic,
+	wpMemoryUsage: { ...deterministic, minAbsolute: 1024 * 1024 },
+	domContentLoaded: timing,
+	largestContentfulPaint: timing,
+	lcpMinusTtfb: timing,
+	timeToFirstByte: { ...timing, minAbsolute: 5 },
+	wpTotal: { ...timing, minAbsolute: 5 },
 };
 
 /**
@@ -117,37 +87,27 @@ const budgets = {
 const MAD_TO_STANDARD_DEVIATION = 1.4826;
 
 /**
- * Returns the combined noise of two samples of the same metric.
- *
- * @param {number[]} before Values of the target.
- * @param {number[]} after  Values of this change.
- * @return {number} Combined robust standard deviation.
- */
-function combinedNoise( before, after ) {
-	return (
-		MAD_TO_STANDARD_DEVIATION *
-		Math.hypot(
-			medianAbsoluteDeviation( before ),
-			medianAbsoluteDeviation( after )
-		)
-	);
-}
-
-/**
  * Returns the comparison of one metric against its budget.
  *
  * @param {string}   metric Metric name.
  * @param {number[]} before Values of the target.
  * @param {number[]} after  Values of this change.
- * @return {{metric: string, before: number, after: number, delta: number, relative: number, noise: number, regressed: boolean, severity: string}} Comparison.
+ * @return {{metric: string, before: number, after: number, delta: number, relative: number, regressed: boolean, severity: string}} Comparison.
  */
 function compareMetricToBudget( metric, before, after ) {
 	const budget = budgets[ metric ];
 	const beforeMedian = median( before );
 	const afterMedian = median( after );
 	const delta = afterMedian - beforeMedian;
-	const relative = beforeMedian > 0 ? delta / beforeMedian : 0;
-	const noise = budget.noiseFactor ? combinedNoise( before, after ) : 0;
+	const relative =
+		beforeMedian > 0 ? delta / beforeMedian : Number.POSITIVE_INFINITY;
+	const noise = budget.noiseFactor
+		? MAD_TO_STANDARD_DEVIATION *
+		  Math.hypot(
+				medianAbsoluteDeviation( before ),
+				medianAbsoluteDeviation( after )
+		  )
+		: 0;
 
 	const regressed =
 		delta > budget.minAbsolute &&
@@ -160,32 +120,29 @@ function compareMetricToBudget( metric, before, after ) {
 		after: afterMedian,
 		delta,
 		relative,
-		noise,
 		regressed,
 		severity: budget.severity,
 	};
 }
 
 /**
- * Returns the budget comparisons of every scenario measured on both sides.
+ * Returns the regressions of every scenario measured on both sides.
  *
  * @param {Array<{title: string, results: Record<string, number[]>[]}>} beforeStats Results of the target.
  * @param {Array<{title: string, results: Record<string, number[]>[]}>} afterStats  Results of this change.
- * @return {Array<{title: string, comparisons: ReturnType<typeof compareMetricToBudget>[]}>} Comparisons.
+ * @return {Array<{title: string} & ReturnType<typeof compareMetricToBudget>>} Regressions.
  */
-function compareScenariosToBudgets( beforeStats, afterStats ) {
-	const scenarios = [];
-
-	for ( const { title, results } of afterStats ) {
+function findRegressions( beforeStats, afterStats ) {
+	return afterStats.flatMap( ( { title, results } ) => {
 		const beforeStat = beforeStats.find( ( stat ) => stat.title === title );
 		if ( ! beforeStat ) {
-			continue;
+			return [];
 		}
 
 		const afterValues = accumulateValues( results );
 		const beforeValues = accumulateValues( beforeStat.results );
 
-		const comparisons = Object.keys( budgets )
+		return Object.keys( budgets )
 			.filter(
 				( metric ) =>
 					afterValues[ metric ]?.length &&
@@ -197,34 +154,24 @@ function compareScenariosToBudgets( beforeStats, afterStats ) {
 					beforeValues[ metric ],
 					afterValues[ metric ]
 				)
-			);
-
-		scenarios.push( { title, comparisons } );
-	}
-
-	return scenarios;
+			)
+			.filter( ( comparison ) => comparison.regressed )
+			.map( ( comparison ) => ( { title, ...comparison } ) );
+	} );
 }
 
 /**
- * Formats the regressions as a Markdown table.
+ * Formats how much a regressed metric grew, in its unit and in percent.
  *
- * @param {Array<{title: string} & ReturnType<typeof compareMetricToBudget>>} regressions Regressions.
- * @return {string} Markdown table.
+ * @param {ReturnType<typeof compareMetricToBudget>} regression Regression.
+ * @return {string} Formatted growth, for example `+12 ms (+25.0 %)`.
  */
-function formatRegressionsAsMarkdownTable( regressions ) {
-	return formatAsMarkdownTable(
-		regressions.map( ( regression ) => ( {
-			Scenario: regression.title,
-			Metric: regression.metric,
-			Before: formatValue( regression.metric, regression.before ),
-			After: formatValue( regression.metric, regression.after ),
-			Change: `+${ formatValue(
-				regression.metric,
-				regression.delta
-			) } (+${ ( regression.relative * 100 ).toFixed( 1 ) } %)`,
-			Severity: regression.severity,
-		} ) )
-	);
+function formatGrowth( regression ) {
+	const absolute = `+${ formatValue( regression.metric, regression.delta ) }`;
+
+	return Number.isFinite( regression.relative )
+		? `${ absolute } (+${ ( regression.relative * 100 ).toFixed( 1 ) } %)`
+		: absolute;
 }
 
 /**
@@ -236,7 +183,7 @@ function formatRegressionsAsMarkdownTable( regressions ) {
  * @param {string}  reference.missingNote Note shown when there are no reference results.
  * @param {boolean} reference.enforced    Whether error regressions may fail the check.
  * @param {Array<{title: string, results: Record<string, number[]>[]}>} afterStats Results of this change.
- * @return {{markdown: string, regressions: Array, scenarios: Array, failed: boolean}} Report.
+ * @return {{markdown: string, failed: boolean}} Report.
  */
 function checkAgainstReference( reference, afterStats ) {
 	const referenceStats = parseFile( reference.file );
@@ -245,21 +192,14 @@ function checkAgainstReference( reference, afterStats ) {
 	if ( ! referenceStats.length || ! afterStats.length ) {
 		return {
 			markdown: `${ markdown }${ reference.missingNote }\n\n`,
-			regressions: [],
-			scenarios: [],
 			failed: false,
 		};
 	}
 
-	const scenarios = compareScenariosToBudgets( referenceStats, afterStats );
-	const regressions = scenarios.flatMap( ( { title, comparisons } ) =>
-		comparisons
-			.filter( ( comparison ) => comparison.regressed )
-			.map( ( comparison ) => ( { title, ...comparison } ) )
-	);
-	const errors = regressions.filter(
-		( regression ) => regression.severity === 'error'
-	);
+	const regressions = findRegressions( referenceStats, afterStats );
+	const failed =
+		reference.enforced &&
+		regressions.some( ( regression ) => regression.severity === 'error' );
 
 	for ( const regression of regressions ) {
 		const level =
@@ -279,7 +219,7 @@ function checkAgainstReference( reference, afterStats ) {
 			) } to ${ formatValue(
 				regression.metric,
 				regression.after
-			) } (+${ ( regression.relative * 100 ).toFixed( 1 ) } %).`
+			) }, ${ formatGrowth( regression ) }.`
 		);
 	}
 
@@ -287,27 +227,32 @@ function checkAgainstReference( reference, afterStats ) {
 		markdown +=
 			':white_check_mark: No metric got worse by more than its budget allows.\n\n';
 	} else {
-		markdown += `:${ errors.length ? 'x' : 'warning' }: ${
+		const hasErrors = regressions.some(
+			( regression ) => regression.severity === 'error'
+		);
+		markdown += `:${ hasErrors ? 'x' : 'warning' }: ${
 			regressions.length
 		} ${
 			regressions.length === 1 ? 'metric' : 'metrics'
 		} got worse by more than the budget allows.\n\n`;
-		markdown += `${ formatRegressionsAsMarkdownTable( regressions ) }\n`;
+		markdown += `${ formatAsMarkdownTable(
+			regressions.map( ( regression ) => ( {
+				Scenario: regression.title,
+				Metric: regression.metric,
+				Before: formatValue( regression.metric, regression.before ),
+				After: formatValue( regression.metric, regression.after ),
+				Change: formatGrowth( regression ),
+				Severity: regression.severity,
+			} ) )
+		) }\n`;
 	}
-
-	const failed = reference.enforced && errors.length > 0;
 
 	if ( failed && regressionAccepted ) {
 		markdown +=
 			'This change is marked as an accepted performance regression, so the check does not fail.\n\n';
 	}
 
-	return {
-		markdown,
-		regressions,
-		scenarios,
-		failed: failed && ! regressionAccepted,
-	};
+	return { markdown, failed: failed && ! regressionAccepted };
 }
 
 const afterStats = parseFile( 'performance-results.json' );
@@ -341,15 +286,6 @@ const summaryMarkdown =
 	releaseReport.markdown +
 	'Asset counts and sizes, database queries and memory usage are deterministic for a build, so exceeding their budget fails pull requests. ' +
 	'Timings are reported as warnings, because shared CI runners add noise.\n';
-
-writeFileSync(
-	join( process.env.WP_ARTIFACTS_PATH, 'performance-regressions.json' ),
-	JSON.stringify(
-		{ target: targetReport, release: releaseReport },
-		( key, value ) => ( key === 'markdown' ? undefined : value ),
-		2
-	)
-);
 
 if ( summaryFile ) {
 	writeFileSync( summaryFile, summaryMarkdown );

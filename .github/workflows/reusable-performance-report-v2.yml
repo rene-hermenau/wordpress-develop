@@ -89,36 +89,24 @@ jobs:
       - name: List files
         run: tree artifacts
 
-      - name: Compare results
-        run: node ./tests/performance/compare-results.js "${RUNNER_TEMP}/summary.md"
-
       - name: Check performance budgets
         id: check-budgets
         continue-on-error: true
         env:
           PERFORMANCE_REGRESSION_MODE: ${{ inputs.fail-on-regression && 'fail' || 'report' }}
           PERFORMANCE_REGRESSION_ACCEPTED: ${{ inputs.regression-accepted }}
-        run: node ./tests/performance/check-regressions.js "${RUNNER_TEMP}/budgets.md"
+        run: node ./tests/performance/check-regressions.js "$GITHUB_STEP_SUMMARY"
+
+      - name: Compare results
+        run: node ./tests/performance/compare-results.js "${RUNNER_TEMP}/summary.md"
 
       - name: Add workflow summary
-        run: |
-          if [ -f "${RUNNER_TEMP}/budgets.md" ]; then
-            cat "${RUNNER_TEMP}/budgets.md" >> "$GITHUB_STEP_SUMMARY"
-          fi
-          cat "${RUNNER_TEMP}/summary.md" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload budget check results
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: performance-budgets-${{ inputs.multisite && 'multisite' || 'single' }}-${{ inputs.memcached && 'memcached' || 'default' }}
-          path: artifacts/performance-regressions.json
-          if-no-files-found: ignore
-          retention-days: 7
+        run: cat "${RUNNER_TEMP}/summary.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Fail on performance regressions
-        if: ${{ steps.check-budgets.outcome == 'failure' }}
+        if: ${{ inputs.fail-on-regression && steps.check-budgets.outcome == 'failure' }}
         run: |
-          echo "::error::A deterministic performance metric exceeds its budget. See the job summary for details."
+          echo "::error::The performance budget check failed. See the job summary and the log of the budget check step."
           exit 1
 
       - name: Set the base sha
