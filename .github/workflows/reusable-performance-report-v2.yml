@@ -106,7 +106,7 @@ jobs:
       - name: Fail on performance regressions
         if: ${{ inputs.fail-on-regression && steps.check-budgets.outcome == 'failure' }}
         run: |
-          echo "::error::The performance budget check failed. See the job summary and the log of the budget check step."
+          echo "::error::The performance budget check failed. See the job summary and the log of the budget check step. If the cost is accepted, add the 'Accepted Performance Regression' label and push a new commit; re-running this job does not pick up new labels."
           exit 1
 
       - name: Set the base sha

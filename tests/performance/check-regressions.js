@@ -177,10 +177,14 @@ function formatGrowth( regression ) {
 /**
  * Checks this change against one reference and reports its regressions.
  *
+ * A missing reference is only reported when it is enforced, because the
+ * workflow measures the target commit on pull requests and the last release
+ * on trunk, never both.
+ *
  * @param {Object}  reference
  * @param {string}  reference.file        Results file of the reference.
  * @param {string}  reference.heading     Heading of the report section.
- * @param {string}  reference.missingNote Note shown when there are no reference results.
+ * @param {string}  reference.missingNote Note shown when an enforced reference has no results.
  * @param {boolean} reference.enforced    Whether error regressions may fail the check.
  * @param {Array<{title: string, results: Record<string, number[]>[]}>} afterStats Results of this change.
  * @return {{markdown: string, failed: boolean}} Report.
@@ -191,21 +195,24 @@ function checkAgainstReference( reference, afterStats ) {
 
 	if ( ! referenceStats.length || ! afterStats.length ) {
 		return {
-			markdown: `${ markdown }${ reference.missingNote }\n\n`,
+			markdown: reference.enforced
+				? `${ markdown }${ reference.missingNote }\n\n`
+				: '',
 			failed: false,
 		};
 	}
 
 	const regressions = findRegressions( referenceStats, afterStats );
-	const failed =
-		reference.enforced &&
-		regressions.some( ( regression ) => regression.severity === 'error' );
+	const hasErrors = regressions.some(
+		( regression ) => regression.severity === 'error'
+	);
+	const failed = reference.enforced && hasErrors;
+	const errorRegressionsFailCheck =
+		reference.enforced && ! regressionAccepted;
 
 	for ( const regression of regressions ) {
 		const level =
-			reference.enforced &&
-			! regressionAccepted &&
-			regression.severity === 'error'
+			errorRegressionsFailCheck && regression.severity === 'error'
 				? 'error'
 				: 'warning';
 		console.log(
@@ -227,9 +234,6 @@ function checkAgainstReference( reference, afterStats ) {
 		markdown +=
 			':white_check_mark: No metric got worse by more than its budget allows.\n\n';
 	} else {
-		const hasErrors = regressions.some(
-			( regression ) => regression.severity === 'error'
-		);
 		markdown += `:${ hasErrors ? 'x' : 'warning' }: ${
 			regressions.length
 		} ${
@@ -274,7 +278,6 @@ const releaseReport = checkAgainstReference(
 		heading: `Compared with the last release${
 			process.env.BASE_TAG ? ` (${ process.env.BASE_TAG })` : ''
 		}`,
-		missingNote: 'The last release was not measured in this run.',
 		enforced: false,
 	},
 	afterStats
